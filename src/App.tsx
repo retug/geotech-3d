@@ -2,6 +2,7 @@ import { Canvas } from "@react-three/fiber";
 import { OrbitControls, Text } from "@react-three/drei";
 import * as THREE from "three";
 import { Delaunay } from "d3-delaunay";
+import { useState } from "react";
 
 type SoilType = "Sand" | "Clay" | "Gravel" | "Rock";
 
@@ -32,8 +33,13 @@ type ProfilePoint = {
 
 const soilTypes: SoilType[] = ["Sand", "Clay", "Gravel", "Rock"];
 
-const sectionStart = new THREE.Vector3(-110, -55, 720);
-const sectionEnd = new THREE.Vector3(115, 55, 720);
+// const sectionStart = new THREE.Vector3(-110, -55, 720);
+// const sectionEnd = new THREE.Vector3(115, 55, 720);
+
+type SectionSegment = {
+  start: THREE.Vector3;
+  end: THREE.Vector3;
+};
 
 function getSoilColor(soilType: SoilType) {
   switch (soilType) {
@@ -161,10 +167,11 @@ function sampleSurfaceAtPoint(
 
 function buildSampledProfilePoints(
   borings: Boring[],
+  section: SectionSegment,
   stationSpacing = 5
 ): ProfilePoint[] {
-  const start = new THREE.Vector2(sectionStart.x, sectionStart.y);
-  const end = new THREE.Vector2(sectionEnd.x, sectionEnd.y);
+  const start = new THREE.Vector2(section.start.x, section.start.y);
+  const end = new THREE.Vector2(section.end.x, section.end.y);
 
   const line = end.clone().sub(start);
   const length = line.length();
@@ -397,16 +404,39 @@ function BoringMesh({ boring }: { boring: Boring }) {
   );
 }
 
-function SectionLine() {
+function SectionLine({ section }: { section: SectionSegment }) {
   const geometry = new THREE.BufferGeometry().setFromPoints([
-    sectionStart,
-    sectionEnd,
+    section.start,
+    section.end,
   ]);
 
   return (
     <line geometry={geometry}>
       <lineBasicMaterial color="blue" />
     </line>
+  );
+}
+
+function SectionDrawingPlane({
+  isDrawing,
+  onPickPoint,
+}: {
+  isDrawing: boolean;
+  onPickPoint: (point: THREE.Vector3) => void;
+}) {
+  if (!isDrawing) return null;
+
+  return (
+    <mesh
+      position={[0, 0, 720]}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        onPickPoint(new THREE.Vector3(e.point.x, e.point.y, 720));
+      }}
+    >
+      <planeGeometry args={[300, 180]} />
+      <meshBasicMaterial transparent opacity={0.08} color="blue" />
+    </mesh>
   );
 }
 
@@ -460,54 +490,149 @@ function ProfileLayer({
   );
 }
 
-function ProfileView({ borings }: { borings: Boring[] }) {
-  const profilePoints = buildSampledProfilePoints(borings, 5);
+function ProfileStationTicks({ points }: { points: ProfilePoint[] }) {
+  if (points.length === 0) return null;
+
+  const minElevation = Math.min(
+    ...points.flatMap((p) => soilTypes.map((s) => p.elevations[s]))
+  );
 
   return (
-    <Canvas orthographic camera={{ position: [115, -220, 700], zoom: 3 }}>
-      <ambientLight intensity={0.8} />
-      <pointLight position={[50, -80, 760]} />
+    <>
+      {points.map((p, index) => {
+        if (index % 2 !== 0) return null;
 
-      <OrbitControls target={[115, 0, 680]} />
+        return (
+          <group key={index}>
+            <line
+              geometry={new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(p.distance, 0, minElevation - 2),
+                new THREE.Vector3(p.distance, 0, minElevation - 6),
+              ])}
+            >
+              <lineBasicMaterial color="black" />
+            </line>
+
+            <Text
+              position={[p.distance, 0, minElevation - 10]}
+              fontSize={2}
+              color="black"
+              anchorX="center"
+              anchorY="middle"
+              rotation={[-Math.PI / 2, 0, 0]}
+            >
+              {`${Math.round(p.distance)}'`}
+            </Text>
+          </group>
+        );
+      })}
+    </>
+  );
+}
+
+function ProfileElevationLabels({ points }: { points: ProfilePoint[] }) {
+  if (points.length === 0) return null;
+
+  const allElevations = points.flatMap((p) =>
+    soilTypes.map((s) => p.elevations[s])
+  );
+
+  const minElevation = Math.floor(Math.min(...allElevations) / 10) * 10;
+  const maxElevation = Math.ceil(Math.max(...allElevations) / 10) * 10;
+
+  const labels: number[] = [];
+
+  for (let elev = minElevation; elev <= maxElevation; elev += 10) {
+    labels.push(elev);
+  }
+
+  return (
+    <>
+      {labels.map((elev) => (
+        <group key={elev}>
+          <line
+            geometry={new THREE.BufferGeometry().setFromPoints([
+              new THREE.Vector3(0, 0, elev),
+              new THREE.Vector3(230, 0, elev),
+            ])}
+          >
+            <lineBasicMaterial color="lightgray" />
+          </line>
+
+          <Text
+            position={[-8, 0, elev]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            fontSize={2}
+            color="black"
+            anchorX="right"
+            anchorY="middle"
+          >
+            {`${elev}'`}
+          </Text>
+        </group>
+      ))}
+    </>
+  );
+}
+
+function ProfileView({
+  borings,
+  section,
+}: {
+  borings: Boring[];
+  section: SectionSegment;
+}) {
+  const profilePoints = buildSampledProfilePoints(borings, section, 5);
+
+  return (
+    <Canvas
+      orthographic
+      camera={{ position: [115, -220, 680], zoom: 3 }}
+      onCreated={({ camera }) => {
+        camera.up.set(0, 0, 1);
+        camera.lookAt(115, 0, 680);
+        camera.updateProjectionMatrix();
+      }}
+    >
+      <ambientLight intensity={0.8} />
+
+      <ProfileElevationLabels points={profilePoints} />
 
       <ProfileLayer points={profilePoints} topSoil="Sand" bottomSoil="Clay" />
       <ProfileLayer points={profilePoints} topSoil="Clay" bottomSoil="Gravel" />
       <ProfileLayer points={profilePoints} topSoil="Gravel" bottomSoil="Rock" />
 
-      {profilePoints.map((p, index) => {
-        if (index % 5 !== 0) return null;
-
-        return (
-          <Text
-            key={index}
-            position={[p.distance, 0, p.elevations.Sand + 4]}
-            fontSize={2}
-            color="black"
-            anchorX="center"
-            anchorY="middle"
-          >
-            {`${Math.round(p.distance)}'`}
-          </Text>
-        );
-      })}
+      <ProfileStationTicks points={profilePoints} />
     </Canvas>
   );
 }
 
-function SiteView({ borings }: { borings: Boring[] }) {
+function SiteView({
+  borings,
+  section,
+  isDrawing,
+  onPickPoint,
+}: {
+  borings: Boring[];
+  section: SectionSegment;
+  isDrawing: boolean;
+  onPickPoint: (point: THREE.Vector3) => void;
+}) {
   return (
     <Canvas camera={{ position: [150, -170, 750], fov: 45 }}>
       <ambientLight intensity={0.7} />
       <pointLight position={[50, -50, 760]} />
 
-      <OrbitControls target={[0, 0, 680]} />
+      <OrbitControls target={[0, 0, 680]} enabled={!isDrawing} />
+
+      <SectionDrawingPlane isDrawing={isDrawing} onPickPoint={onPickPoint} />
 
       <BoundarySurface borings={borings} soilType="Sand" opacity={0.12} />
       <BoundarySurface borings={borings} soilType="Clay" opacity={0.18} />
       <BoundarySurface borings={borings} soilType="Gravel" opacity={0.22} />
       <BoundarySurface borings={borings} soilType="Rock" opacity={0.28} />
 
-      <SectionLine />
+      <SectionLine section={section} />
 
       {borings.map((b) => (
         <BoringMesh key={b.id} boring={b} />
@@ -519,6 +644,38 @@ function SiteView({ borings }: { borings: Boring[] }) {
 function App() {
   const borings = makeTestBorings();
 
+  const [section, setSection] = useState<SectionSegment>({
+    start: new THREE.Vector3(-110, -55, 720),
+    end: new THREE.Vector3(115, 55, 720),
+  });
+
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [pendingStart, setPendingStart] = useState<THREE.Vector3 | null>(null);
+
+  function handlePickPoint(point: THREE.Vector3) {
+    if (!pendingStart) {
+      setPendingStart(point);
+      setSection({
+        start: point,
+        end: point.clone().add(new THREE.Vector3(1, 1, 0)),
+      });
+      return;
+    }
+
+    setSection({
+      start: pendingStart,
+      end: point,
+    });
+
+    setPendingStart(null);
+    setIsDrawing(false);
+  }
+
+  function startDrawingSection() {
+    setPendingStart(null);
+    setIsDrawing(true);
+  }
+
   return (
     <div
       style={{
@@ -526,14 +683,41 @@ function App() {
         height: "100vh",
         display: "grid",
         gridTemplateRows: "1fr 1fr",
+        position: "relative",
       }}
     >
+      <button
+        onClick={startDrawingSection}
+        style={{
+          position: "absolute",
+          top: 12,
+          left: 12,
+          zIndex: 10,
+          padding: "8px 12px",
+          borderRadius: 6,
+          border: "1px solid #888",
+          background: isDrawing ? "#cce5ff" : "white",
+          cursor: "pointer",
+        }}
+      >
+        {isDrawing
+          ? pendingStart
+            ? "Pick section end"
+            : "Pick section start"
+          : "Draw Section Line"}
+      </button>
+
       <div style={{ borderBottom: "1px solid #ccc" }}>
-        <SiteView borings={borings} />
+        <SiteView
+          borings={borings}
+          section={section}
+          isDrawing={isDrawing}
+          onPickPoint={handlePickPoint}
+        />
       </div>
 
       <div>
-        <ProfileView borings={borings} />
+        <ProfileView borings={borings} section={section} />
       </div>
     </div>
   );
